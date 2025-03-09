@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>테트리스</title>
+  <style>
+    body {
+      margin: 0;
+      background: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: sans-serif;
+      color: #fff;
+    }
+
+    canvas {
+      background: #000;
+      display: block;
+      margin: 0 auto;
+      border: 2px solid #888;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+    }
+
+    .info {
+      margin-top: 10px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>테트리스</h1>
+  <canvas id="game" width="200" height="400"></canvas>
+  <div class="info">
+    <p>키보드 방향키로 움직이고, ↑ 키로 회전합니다.</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const context = canvas.getContext('2d');
+
+    // 각 칸의 크기(픽셀)
+    const grid = 20;
+    // 게임판의 너비(열), 높이(행)
+    const cols = 10;
+    const rows = 20;
+
+    // 게임판(2차원 배열)
+    // 0이면 빈칸, 0이 아니면 블록 색을 나타내는 값(1~7 등)
+    let board = [];
+    for (let r = 0; r < rows; r++) {
+      board[r] = [];
+      for (let c = 0; c < cols; c++) {
+        board[r][c] = 0;
+      }
+    }
+
+    // 테트리스 도형 7종 (각 도형의 회전 형태는 사용 시 동적 구성)
+    // 예: I, O, S, Z, L, J, T
+    // 숫자는 색 구분용으로 1~7 정도로 일단 부여
+    const SHAPES = [
+      // I 블록
+      [
+        [[1, 1, 1, 1]]
+      ],
+      // O 블록
+      [
+        [[2, 2],
+         [2, 2]]
+      ],
+      // S 블록
+      [
+        [[0, 3, 3],
+         [3, 3, 0]],
+      ],
+      // Z 블록
+      [
+        [[4, 4, 0],
+         [0, 4, 4]],
+      ],
+      // L 블록
+      [
+        [[5, 0, 0],
+         [5, 5, 5]]
+      ],
+      // J 블록
+      [
+        [[0, 0, 6],
+         [6, 6, 6]]
+      ],
+      // T 블록
+      [
+        [[0, 7, 0],
+         [7, 7, 7]]
+      ]
+    ];
+
+    // 현재 떨어지는 블록 정보
+    let currentPiece = null;
+
+    // 블록을 표현하는 객체: shape(배열), 색상값, 위치(x, y) 등
+    class Piece {
+      constructor(shape, color) {
+        // shape: 2차원 배열(회전 시 변형)
+        this.shape = shape;
+        this.color = color;
+        // 블록 좌표(왼쪽 위 기준, 열, 행)
+        // 기본적으로 상단 중앙에서 시작 (x: cols/2 - shape[0].length/2)
+        this.x = Math.floor(cols / 2) - Math.floor(this.shape[0].length / 2);
+        this.y = 0;
+      }
+
+      // 블록을 게임판에 그리는 함수
+      draw() {
+        for (let r = 0; r < this.shape.length; r++) {
+          for (let c = 0; c < this.shape[r].length; c++) {
+            if (this.shape[r][c]) {
+              drawSquare(this.x + c, this.y + r, this.color);
+            }
+          }
+        }
+      }
+
+      // 블록을 지우는 함수(배경색으로 덮어쓰기 등)
+      // 여기서는 실제 게임판을 지우는 로직이 아니라
+      // '화면 갱신 시' 다시 그려주므로 큰 의미는 없고
+      // 필요 시 구현할 수 있습니다.
+      undraw() {
+        for (let r = 0; r < this.shape.length; r++) {
+          for (let c = 0; c < this.shape[r].length; c++) {
+            if (this.shape[r][c]) {
+              drawSquare(this.x + c, this.y + r, 0);
+            }
+          }
+        }
+      }
+
+      // 블록을 아래로 한 칸 이동
+      moveDown() {
+        if (!this.collision(0, 1, this.shape)) {
+          this.y++;
+        } else {
+          // 바닥 혹은 다른 블록과 충돌 시, board에 병합
+          this.lock();
+          // 새로운 블록 생성
+          currentPiece = randomPiece();
+        }
+      }
+
+      // 블록 왼쪽 이동
+      moveLeft() {
+        if (!this.collision(-1, 0, this.shape)) {
+          this.x--;
+        }
+      }
+
+      // 블록 오른쪽 이동
+      moveRight() {
+        if (!this.collision(1, 0, this.shape)) {
+          this.x++;
+        }
+      }
+
+      // 블록 회전
+      rotate() {
+        // I, S, Z 등은 회전 시 크기가 달라짐
+        let nextPattern = [];
+        for (let r = 0; r < this.shape[0].length; r++) {
+          nextPattern[r] = [];
+          for (let c = 0; c < this.shape.length; c++) {
+            nextPattern[r][c] = this.shape[this.shape.length - 1 - c][r];
+          }
+        }
+
+        // 회전 충돌 검사
+        if (!this.collision(0, 0, nextPattern)) {
+          this.shape = nextPattern;
+          // 회전했는데 이미 화면 밖으로 나가는 경우 조정 가능
+        }
+      }
+
+      // 충돌 감지 함수
+      collision(x, y, shape) {
+        for (let r = 0; r < shape.length; r++) {
+          for (let c = 0; c < shape[r].length; c++) {
+            // shape[r][c]가 0이면 빈 칸이므로 패스
+            if (!shape[r][c]) {
+              continue;
+            }
+            let newX = this.x + c + x;
+            let newY = this.y + r + y;
+
+            // 범위 밖이면 충돌
+            if (newX < 0 || newX >= cols || newY >= rows) {
+              return true;
+            }
+            // 위쪽 화면 밖인 경우는( newY < 0 ) 패스
+            if (newY < 0) {
+              continue;
+            }
+            // 보드에 이미 블록이 있으면 충돌
+            if (board[newY][newX] !== 0) {
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+
+      // 충돌 후, 보드에 현재 블록을 고정(lock)시키고 줄을 지우는 함수
+      lock() {
+        for (let r = 0; r < this.shape.length; r++) {
+          for (let c = 0; c < this.shape[r].length; c++) {
+            if (this.shape[r][c]) {
+              // 화면 위쪽을 넘으면 게임 오버
+              if (this.y + r < 0) {
+                // 새로고침 혹은 alert
+                alert("게임 오버!");
+                // 새 게임 시작을 위해 리셋
+                document.location.reload();
+                return;
+              }
+              board[this.y + r][this.x + c] = this.color;
+            }
+          }
+        }
+        // 줄 완성 체크 및 삭제
+        for (let r = 0; r < rows; r++) {
+          let fullRow = true;
+          for (let c = 0; c < cols; c++) {
+            if (board[r][c] === 0) {
+              fullRow = false;
+              break;
+            }
+          }
+          if (fullRow) {
+            // 해당 줄을 위에서부터 내려옴
+            for (let y = r; y > 1; y--) {
+              for (let c = 0; c < cols; c++) {
+                board[y][c] = board[y - 1][c];
+              }
+            }
+            // 가장 윗줄은 빈칸으로
+            for (let c = 0; c < cols; c++) {
+              board[0][c] = 0;
+            }
+          }
+        }
+      }
+    }
+
+    // 블록 하나를 그리는 함수
+    // color가 0이면 빈칸(검정), 0이 아니면 특정 블록 색
+    function drawSquare(x, y, color) {
+      context.fillStyle = color ? "rgb(" + (color*40) + ", " + (color*30) + ", " + (color*10) + ")" : "#000";
+      context.fillRect(x * grid, y * grid, grid, grid);
+
+      // 테두리(옵션)
+      context.strokeStyle = "#333";
+      context.strokeRect(x * grid, y * grid, grid, grid);
+    }
+
+    // 전체 보드를 화면에 그리는 함수
+    function drawBoard() {
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          drawSquare(c, r, board[r][c]);
+        }
+      }
+    }
+
+    // 랜덤 블록 생성
+    function randomPiece() {
+      // 0~6 랜덤
+      let r = Math.floor(Math.random() * SHAPES.length);
+      // 각 도형에서 0번째 회전 형태만 사용하도록 설정
+      let shape = SHAPES[r][0];
+      // 색상은 r+1 등으로 간단 지정
+      return new Piece(shape, r + 1);
+    }
+
+    // 초기 보드 그리기
+    drawBoard();
+    // 현재 블록 하나 생성
+    currentPiece = randomPiece();
+
+    // 블록이 떨어지는 주기(밀리초)
+    let dropStart = Date.now();
+    let gameOver = false;
+
+    // 게임 루프
+    function drop() {
+      let now = Date.now();
+      let delta = now - dropStart;
+      // 1초마다 블록 아래로 이동
+      if (delta > 1000) {
+        currentPiece.moveDown();
+        dropStart = Date.now();
+      }
+      // 화면 갱신
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      drawBoard();
+      currentPiece.draw();
+
+      if (!gameOver) {
+        requestAnimationFrame(drop);
+      }
+    }
+    drop();
+
+    // 키보드 이벤트 처리
+    document.addEventListener('keydown', event => {
+      switch (event.key) {
+        case 'ArrowLeft':
+          currentPiece.moveLeft();
+          dropStart = Date.now(); // 이동 시 타이머 리셋
+          break;
+        case 'ArrowRight':
+          currentPiece.moveRight();
+          dropStart = Date.now();
+          break;
+        case 'ArrowDown':
+          currentPiece.moveDown();
+          dropStart = Date.now();
+          break;
+        case 'ArrowUp':
+          currentPiece.rotate();
+          dropStart = Date.now();
+          break;
+      }
+      // 매번 키 입력 후 화면 갱신
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      drawBoard();
+      currentPiece.draw();
+    });
+  </script>
+</body>
+</html>
